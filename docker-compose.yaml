@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  reverse-proxy:
+    image: traefik:v3.0.2
+    container_name: "traefik"
+    command:
+      - --api.insecure=true
+      - --providers.docker=true
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.myresolver.acme.tlschallenge=true
+      - --certificatesresolvers.myresolver.acme.email=cimomof752@cnurbano.com
+      - --certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - ./letsencrypt:/letsencrypt
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - traefik-net
+
+  server:
+    build: .
+    command: ["./start.sh", "server"]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.server.rule=Host(`server.localhost`)"
+      - "traefik.http.routers.server.entrypoints=websecure"
+      - "traefik.http.routers.server.tls.certresolver=myresolver"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.routers.redirs.rule=hostregexp(`{host:.+}`)"
+      - "traefik.http.routers.redirs.entrypoints=web"
+      - "traefik.http.routers.redirs.middlewares=redirect-to-https"
+    depends_on:
+      - temporal
+    networks:
+      - traefik-net
+      - internal-net
+
+  worker:
+    build: .
+    command: ["./start.sh", "worker"]
+    depends_on:
+      - temporal
+    networks:
+      - internal-net
+
+  temporal:
+    image: temporalio/auto-setup:latest
+    ports:
+      - "7233:7233"
+    environment:
+      - DB=postgresql
+      - POSTGRES_USER=temporal
+      - POSTGRES_PASSWORD=temporal
+      - POSTGRES_DB=temporal
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "7233"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - internal-net
+
+networks:
+  traefik-net:
+    external: true
+  internal-net:
+    external: false
